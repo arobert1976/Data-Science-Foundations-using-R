@@ -1,0 +1,144 @@
+---
+title: "Storm Data Analysis: impacts of severe weather events"
+author: "Arnaud Robert"
+date: "12/11/2020"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Synopsis
+
+In this report, we aim to identify the types of severe weather events (e.g. dense fog, tornado, wildfire...) that are most harmful with respect to population health and have the greatest economic consequences. The  scope of this study is the USA between 1950 and November 2011. We used the data provided by the NOAA to conduct this analysis.
+From these data, we found that :  
+* TORNADO is by far the type of weather events that are most harmful with respect to population health  
+* FLOOD is the type of weather events that have the greatest economic consequences 
+* DROUGHT is the type of weather events that have the greatest economic consequences on crops.
+
+## Data Processing
+
+```{r message=FALSE}
+library("dplyr")
+```
+
+From the [Storm Data](https://d396qusza40orc.cloudfront.net/repdata%2Fdata%2FStormData.csv.bz2) we obtained data on severe weather events across all the US from 1950 to Nov 2011. There are 902297 rows and 37 columns in this dataset :
+
+```{r, cache=TRUE}
+data=read.csv("repdata_data_StormData.csv.bz2", strip.white=TRUE) #strip.white=TRUE removes the leading and trailing spaces
+dim(data)
+```
+
+We checked the first row :
+```{r}
+data[1,]
+```
+
+Then we dediced to keep only the columns EVTYPE (event type), FATALITIES, INJURIES, PROPDMG (property damage), PROPDMGEXT (thousands, millions or billions of dollars of the property damage) CROPDMG (crop damage), CROPDMGEXT (thousands, millions or billions of dollars of the crop damage) that are used in our analysis.  
+Note: other information may be interested for more in-depth analysis. In our analysis, we are not considering time or location and therefore these information are useless.  
+```{r}
+data = select(data,c(EVTYPE,FATALITIES,INJURIES,PROPDMG,PROPDMGEXP, CROPDMG, CROPDMGEXP))
+dim(data)
+```
+
+A quick look at EVTYPE pointed out a problem with the data. Capital letters are not used systematically. E.g. we have blowing snow and BLOWING SNOW. So we decided to put all values in capital letters and transform the EVTYPE as a factor column.
+```{r}
+unique(filter(data, EVTYPE %in% c("blowing snow","BLOWING SNOW"))$EVTYPE) ##just to illustrate the problem
+data = mutate(data, EVTYPE=toupper(EVTYPE))
+unique(filter(data, EVTYPE %in% c("blowing snow","BLOWING SNOW"))$EVTYPE) ##just to illustrate the correction
+data$EVTYPE=as.factor(data$EVTYPE)
+str(data)
+```
+
+Then we decided to split the dataset in 2 separate datasets :  
+* data_health : limited to the events that have an impact on population health FATALITIES>0 | INJURIES>0  
+* data_eco : limited to the events that have an economical impact PROPDMG>0 | CROPDMG>0  
+
+```{r}
+data_health = select(filter(data, FATALITIES>0 | INJURIES>0), c(EVTYPE,FATALITIES,INJURIES))
+head(data_health)
+```
+
+```{r}
+data_eco = select(filter(data, PROPDMG>0 | CROPDMG>0), c(EVTYPE,PROPDMG,PROPDMGEXP,CROPDMG,CROPDMGEXP))
+head(data_eco)
+```
+
+Then we explored the dataset and realized that some records have invalid PROPDMGEXP and CROPDMGEXP. Valid values are K for kilos,M for millions ,B for billions.
+```{r}
+unique(data_eco$PROPDMGEXP)
+unique(data_eco$CROPDMGEXP)
+```
+
+When the EXP column has an invalid value, it's hard to figure out the damage cost. Therefore, we decided to clean up the dataset data_eco by :  
+* Setting PROPDMG=0 where PROPDMGEXP is invalid  
+* Before doing the above change, we checked that it should not impact too dramatically the result of this report by counting the ratio of lines that will be changed.  
+```{r}
+ratio = round((dim(filter(data_eco, PROPDMG>0 & (PROPDMGEXP %in% c("K","m","M","B")==FALSE)))[1]/dim(data_eco)[1])*100,2)
+```
+Only `r ratio`% of the lines will be ignored by setting PROPDMG to 0 when the unit is not known. So let's clean up...
+
+```{r}
+data_eco$PROPDMG = ifelse((data_eco$PROPDMGEXP) %in% c("k","K","m","M","b","B"), data_eco$PROPDMG, 0)
+unique(filter(data_eco, data_eco$PROPDMG>0)$PROPDMGEXP)
+```
+
+Then we repeated the same cleaning process with data_eco$CROPDMG
+```{r}
+ratio = round((dim(filter(data_eco, CROPDMG>0 & (CROPDMGEXP %in% c("K","m","M","B")==FALSE)))[1]/dim(data_eco)[1])*100,2)
+```
+Only `r ratio`% of the lines will be ignored by setting PROPDMG to 0 when the unit is not known. So let's clean up...
+
+```{r}
+data_eco$CROPDMG = ifelse((data_eco$CROPDMGEXP) %in% c("k","K","m","M","b","B"), data_eco$CROPDMG, 0)
+unique(filter(data_eco, data_eco$CROPDMG>0)$CROPDMGEXP)
+```
+
+Final step of data preparation: we decided to create 2 new columns: PROPDMGEXP__ and CROPDMGEXP__ with the damage cost in dollars. E.g. if PROPDMG=2 and PROPDMGEXP=K then PROPDMGEXP__=2000.
+```{r message=FALSE}
+data_eco = mutate(data_eco, PROPDMG__=case_when(
+                                        PROPDMGEXP == "k" ~ PROPDMG*1000,
+                                        PROPDMGEXP == "K" ~ PROPDMG*1000,
+                                        PROPDMGEXP == "m" ~ PROPDMG*1000000,
+                                        PROPDMGEXP == "M" ~ PROPDMG*1000000,
+                                        PROPDMGEXP == "b" ~ PROPDMG*1000000000,
+                                        PROPDMGEXP == "B" ~ PROPDMG*1000000000,
+                                        TRUE ~ PROPDMG
+                                    )
+    )
+data_eco = mutate(data_eco, CROPDMG__=case_when(
+                                        CROPDMGEXP == "k" ~ CROPDMG*1000,
+                                        CROPDMGEXP == "K" ~ CROPDMG*1000,
+                                        CROPDMGEXP == "m" ~ CROPDMG*1000000,
+                                        CROPDMGEXP == "M" ~ CROPDMG*1000000,
+                                        CROPDMGEXP == "b" ~ CROPDMG*1000000000,
+                                        CROPDMGEXP == "B" ~ CROPDMG*1000000000,
+                                        TRUE ~ PROPDMG
+                                    )
+    )
+head(data_eco)    
+```
+
+## Result
+
+At that point, we had a clean dataset and it was possible to finalize the study.
+
+So, what is the type of weather events that are most harmful with respect to population health? 
+```{r}
+data_health_g_f = data_health %>% group_by(EVTYPE) %>% summarize(FATALITIES=sum(FATALITIES),INJURIES=sum(INJURIES)) %>% filter(FATALITIES>1000 | INJURIES>1000)
+barplot(t(as.matrix(data_health_g_f[,2:3])),names.arg=data_health_g_f$EVTYPE,las=2, cex.names=.5,col=c("red","orange"))
+legend("top",legend=c("Fatalities","Injuries"),fill=c("red","orange"))
+```
+  
+The barplot shows that TORNADOS are by far the weather event that cause both the most injuries and the most fatalities
+
+Eventually, what is the type of weather events that have the greatest economic consequences?
+```{r}
+data_eco_g_f = data_eco %>% group_by(EVTYPE) %>% summarize(PROPDMG__=sum(PROPDMG__),CROPDMG__=sum(CROPDMG__)) %>% filter(PROPDMG__>10000000000 | CROPDMG__>1000000000)
+barplot(t(as.matrix(data_eco_g_f[,2:3]/1000000000)),names.arg=data_eco_g_f$EVTYPE,las=2, cex.names=.5,col=c("red","orange"),ylab="Damage cost in billions of dollars")
+legend("topright",legend=c("Property Damage","Crop Damage"),fill=c("red","orange"))
+```
+
+The barplot shows that FLOOD is by far the weather event that has the greatest economic consequences (considering both Property and Crop damages).
+If you focus on crop only :  DROUGHT is the weather event that has the greatest economic on crops.
